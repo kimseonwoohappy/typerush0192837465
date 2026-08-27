@@ -51,6 +51,26 @@
   .icon-btn:hover { border-color:var(--accent); color:var(--accent); }
   .icon-btn.danger:hover { border-color:#ff4466; color:#ff4466; }
   .empty-msg { text-align:center; padding:40px; color:rgba(255,255,255,0.3); }
+
+  /* ── 서버 정지 토글 카드 ── */
+  #server-toggle { cursor:pointer; user-select:none; transition:all 0.25s ease; position:relative; overflow:hidden; }
+  #server-toggle:hover { transform:translateY(-2px); }
+  #server-toggle .label { display:flex; align-items:center; justify-content:space-between; }
+  #server-toggle .hint { font-size:11px; letter-spacing:0; color:rgba(255,255,255,0.25); }
+
+  #server-toggle.running { border-color:rgba(0,255,136,0.35); }
+  #server-toggle.running .value { color:#00ff88; }
+  #server-toggle.running:hover { border-color:#ff4466; }
+
+  #server-toggle.stopped { border-color:#ff4466; background:rgba(255,68,102,0.08); animation:srvPulse 1.6s ease-in-out infinite; }
+  #server-toggle.stopped .value { color:#ff4466; }
+
+  #server-toggle.pending { opacity:0.5; pointer-events:none; }
+
+  @keyframes srvPulse {
+    0%,100% { box-shadow:0 0 0 0 rgba(255,68,102,0.35); }
+    50%     { box-shadow:0 0 18px 3px rgba(255,68,102,0.25); }
+  }
 </style>
 </head>
 <body>
@@ -92,7 +112,11 @@
       <div class="label">👻 게스트</div>
       <div class="value" id="stat-online-guest">0</div>
     </div>
-    <div class="stat-card" style="opacity:0.4;"><div class="label"></div><div class="value"></div></div>
+    <!-- 서버 정지 / 재개 토글 (게스트 포함 전체 차단) -->
+    <div class="stat-card" id="server-toggle" title="클릭하면 게스트를 포함한 전체 접속자를 차단합니다">
+      <div class="label"><span id="server-toggle-label">🛑 서버 정지</span><span class="hint" id="server-toggle-hint">클릭</span></div>
+      <div class="value" id="server-toggle-value">확인 중...</div>
+    </div>
   </div>
   <div class="search-bar">
     <input type="text" id="search-input" class="admin-input" placeholder="🔍 사용자 ID 검색..." style="max-width:400px;">
@@ -177,6 +201,65 @@ function startAdmin(){
     document.getElementById('stat-online').textContent = active.length;
     document.getElementById('stat-online-member').textContent = members;
     document.getElementById('stat-online-guest').textContent = guests;
+  });
+
+  setupServerToggle();
+}
+
+/* ══════════════════════════════════════════════════════════
+   서버 정지 / 재개  (실시간)
+   Firebase의 server_status 노드 하나를 켜고 끄면
+   게임에 접속한 모든 사람(게스트 포함)이 즉시 차단/해제된다.
+   ══════════════════════════════════════════════════════════ */
+let serverStatusRef = null;
+let serverLocked = false;
+
+function setupServerToggle(){
+  const card  = document.getElementById('server-toggle');
+  const label = document.getElementById('server-toggle-label');
+  const hint  = document.getElementById('server-toggle-hint');
+  const value = document.getElementById('server-toggle-value');
+  if (!card || !db) return;
+
+  serverStatusRef = db.ref('server_status');
+
+  // 실시간 수신: 다른 창에서 바꿔도 즉시 반영된다
+  serverStatusRef.on('value', snap => {
+    const s = snap.val() || {};
+    serverLocked = (s.locked === true);
+    card.classList.remove('pending');
+    card.classList.toggle('stopped', serverLocked);
+    card.classList.toggle('running', !serverLocked);
+    label.textContent = serverLocked ? '🛑 서버 정지 중' : '🟢 서버 정상';
+    value.textContent = serverLocked ? 'STOPPED' : 'RUNNING';
+    hint.textContent  = serverLocked ? '클릭하면 재개' : '클릭하면 정지';
+    card.title = serverLocked
+      ? '클릭하면 서버를 다시 엽니다'
+      : '클릭하면 게스트를 포함한 전체 접속자를 차단합니다';
+  }, err => {
+    card.classList.remove('pending');
+    value.textContent = '연결 실패';
+    console.error('server_status 구독 실패', err);
+  });
+
+  card.addEventListener('click', () => {
+    const next = !serverLocked;
+    const msg = next
+      ? '서버를 정지합니다.\n\n지금 접속 중인 모든 사용자(게스트 포함)가 즉시 차단됩니다.\n계속할까요?'
+      : '서버를 다시 엽니다.\n모든 사용자의 접속이 즉시 복구됩니다.\n계속할까요?';
+    if (!confirm(msg)) return;
+
+    card.classList.add('pending');
+    serverStatusRef.set({
+      locked: next,
+      since: firebase.database.ServerValue.TIMESTAMP,
+      by: 'admin'
+    }).then(() => {
+      flash(next ? '🛑 서버를 정지했습니다' : '🟢 서버를 다시 열었습니다');
+    }).catch(e => {
+      card.classList.remove('pending');
+      alert('서버 상태 변경 실패: ' + e.message);
+    });
   });
 }
 function renderStats(){
